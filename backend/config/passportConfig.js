@@ -5,6 +5,7 @@ const config = require('./config');
 const User = require('../models/User');
 const Email = require('../models/Email');
 const getGmailClient = require('../config/googleClient');
+const { startPollingForUser } = require('../polling/gmailPolling');
 
 passport.use(new GoogleStrategy({
   clientID: config.google.clientID,
@@ -47,8 +48,6 @@ async (accessToken, refreshToken, profile, done) => {
       const messages = response.data.messages;
       pageToken = response.data.nextPageToken;
 
-
-      console.log("Started")
       for (const message of messages) {
         const emailData = await gmail.users.messages.get({ userId: 'me', id: message.id });
         const email = {
@@ -73,7 +72,7 @@ async (accessToken, refreshToken, profile, done) => {
       await Email.insertMany(batchEmails); // Insert remaining emails
     }
 
-    console.log("Ended");
+    startPollingForUser(user);
 
   } catch (err) {
     console.error('Error in Google OAuth strategy:', err);

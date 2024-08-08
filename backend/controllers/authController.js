@@ -1,4 +1,5 @@
 const passport = require('passport');
+const { stopPollingForUser } = require('../polling/gmailPolling');
 
 exports.googleAuth = passport.authenticate('google', { scope: ['profile', 'email', 'https://mail.google.com/'] });
 
@@ -30,6 +31,10 @@ exports.googleAuthCallback = (req, res, next) => {
 exports.logout = (req, res) => {
   req.logout(err => {
     if (err) return next(err);
+    if (userId) {
+      stopPollingForUser(userId);
+    }
+      
     res.redirect('/');
   });
 };
