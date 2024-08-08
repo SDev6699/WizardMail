@@ -1,70 +1,214 @@
-const { google } = require('googleapis');
-const jwt = require('jsonwebtoken');
-const config = require('../config/config');
+const Email = require('../models/Email');
+const fs = require('fs');
 
-const oauth2Client = new google.auth.OAuth2(
-    config.google.clientID,
-    config.google.clientSecret,
-    config.google.callbackURL
-);
-
-exports.getEmails = (req, res) => {
-    oauth2Client.setCredentials({ access_token: req.user.token });
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-    gmail.users.messages.list({ userId: 'me', maxResults: 10 }, (err, response) => {
-        if (err) return res.status(500).send('The API returned an error: ' + err);
-        const messages = response.data.messages;
-        if (!messages || messages.length === 0) return res.send('No messages found.');
-        
-        const messagePromises = messages.map((message) => {
-            return gmail.users.messages.get({ userId: 'me', id: message.id });
-        });
-
-        Promise.all(messagePromises)
-            .then((messages) => res.json(messages.map((message) => message.data)))
-            .catch((error) => res.status(500).send('Error fetching messages: ' + error));
-    });
+exports.getEmails = async (req, res) => {
+  try {
+    const { folder, page = 1, limit = 10 } = req.query;
+    const emails = await Email.find({ userId: req.user._id, folder: folder || 'inbox' })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+    res.json(emails);
+  } catch (error) {
+    res.status(500).send('Error fetching emails: ' + error);
+  }
 };
 
-exports.deleteEmail = (req, res) => {
-    const token = req.user.token;
-    oauth2Client.setCredentials({ access_token: token });
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-    gmail.users.messages.delete({ userId: 'me', id: req.params.id }, (err, response) => {
-        if (err) {
-            console.error('Error deleting email:', err);
-            return res.status(500).send('The API returned an error: ' + err);
-        }
-        res.send('Email deleted successfully.');
-    });
+exports.getThreads = async (req, res) => {
+  try {
+    const { folder, page = 1, limit = 10 } = req.query;
+    const emails = await Email.aggregate([
+      { $match: { userId: req.user._id, folder: folder || 'inbox' } },
+      { $group: { _id: "$threadId", latestEmail: { $last: "$$ROOT" } } },
+      { $skip: (page - 1) * limit },
+      { $limit: parseInt(limit) }
+    ]);
+    res.json(emails.map(group => group.latestEmail));
+  } catch (error) {
+    res.status(500).send('Error fetching email threads: ' + error);
+  }
 };
 
-exports.replyEmail = (req, res) => {
-    oauth2Client.setCredentials({ access_token: req.user.token });
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+exports.sendEmail = async (req, res) => {
+  try {
+    const attachments = req.files.map(file => file.path);
+    const email = new Email({ ...req.body, attachments, userId: req.user._id });
+    await email.save();
+    res.status(201).json(email);
+  } catch (error) {
+    res.status(500).send('Error sending email: ' + error);
+  }
+};
 
-    const { to, subject, text } = req.body;
+exports.markAsRead = async (req, res) => {
+  try {
+    const email = await Email.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { read: true },
+      { new: true }
+    );
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.json(email);
+  } catch (error) {
+    res.status(500).send('Error marking email as read: ' + error);
+  }
+};
 
-    const email = [
-        `To: ${to}`,
-        'Content-Type: text/plain; charset=utf-8',
-        'Content-Transfer-Encoding: 7bit',
-        `Subject: ${subject}`,
-        '',
-        text,
-    ].join('\n').trim();
+exports.markAsUnread = async (req, res) => {
+  try {
+    const email = await Email.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { read: false },
+      { new: true }
+    );
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.json(email);
+  } catch (error) {
+    res.status(500).send('Error marking email as unread: ' + error);
+  }
+};
 
-    const base64EncodedEmail = Buffer.from(email).toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
+exports.starEmail = async (req, res) => {
+  try {
+    const email = await Email.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { starred: true },
+      { new: true }
+    );
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.json(email);
+  } catch (error) {
+    res.status(500).send('Error starring email: ' + error);
+  }
+};
 
-    gmail.users.messages.send({
-        userId: 'me',
-        requestBody: {
-            raw: base64EncodedEmail,
-        },
-    }, (err, response) => {
-        if (err) return res.status(500).send('The API returned an error: ' + err);
-        res.json(response.data);
-    });
+exports.unstarEmail = async (req, res) => {
+  try {
+    const email = await Email.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { starred: false },
+      { new: true }
+    );
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.json(email);
+  } catch (error) {
+    res.status(500).send('Error unstarring email: ' + error);
+  }
+};
+
+exports.moveEmail = async (req, res) => {
+  try {
+    const { folder } = req.body;
+    const email = await Email.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { folder },
+      { new: true }
+    );
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.json(email);
+  } catch (error) {
+    res.status(500).send('Error moving email: ' + error);
+  }
+};
+
+exports.deleteEmail = async (req, res) => {
+  try {
+    const email = await Email.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { folder: 'trash' },
+      { new: true }
+    );
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.json(email);
+  } catch (error) {
+    res.status(500).send('Error deleting email: ' + error);
+  }
+};
+
+exports.permanentlyDeleteEmail = async (req, res) => {
+  try {
+    const email = await Email.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.send('Email permanently deleted.');
+  } catch (error) {
+    res.status(500).send('Error permanently deleting email: ' + error);
+  }
+};
+
+exports.snoozeEmail = async (req, res) => {
+  try {
+    const { snoozedUntil } = req.body;
+    const email = await Email.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { snoozedUntil },
+      { new: true }
+    );
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.json(email);
+  } catch (error) {
+    res.status(500).send('Error snoozing email: ' + error);
+  }
+};
+
+exports.archiveEmail = async (req, res) => {
+  try {
+    const email = await Email.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { folder: 'archive' },
+      { new: true }
+    );
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.json(email);
+  } catch (error) {
+    res.status(500).send('Error archiving email: ' + error);
+  }
+};
+
+exports.markAsSpam = async (req, res) => {
+  try {
+    const email = await Email.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { isSpam: true, folder: 'spam' },
+      { new: true }
+    );
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.json(email);
+  } catch (error) {
+    res.status(500).send('Error marking email as spam: ' + error);
+  }
+};
+
+exports.unmarkAsSpam = async (req, res) => {
+  try {
+    const email = await Email.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { isSpam: false, folder: 'inbox' },
+      { new: true }
+    );
+    if (!email) {
+      return res.status(404).send('Email not found');
+    }
+    res.json(email);
+  } catch (error) {
+    res.status(500).send('Error unmarking email as spam: ' + error);
+  }
 };

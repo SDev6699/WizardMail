@@ -1,12 +1,24 @@
 {
+  "name": "wizardmail-backend",
+  "version": "1.0.0",
+  "description": "Backend for email client application",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
   "dependencies": {
-    "axios": "^1.7.2",
-    "body-parser": "^1.20.2",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "express-session": "^1.18.0",
     "googleapis": "^140.0.1",
+    "mongoose": "^8.5.2",
+    "multer": "^1.4.5-lts.1",
     "passport": "^0.7.0",
-    "passport-google-oauth20": "^2.0.0"
+    "passport-google-oauth20": "^2.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
   }
 }
